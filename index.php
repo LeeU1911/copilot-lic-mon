@@ -488,6 +488,77 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['subscribe'])) {
         exit('Subscription creation failed: ' . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8'));
     }
 }
+
+// Handle "Save Now" with inline pricing
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_now'])) {
+    try {
+        // Verify CSRF token
+        if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+            throw new Exception('CSRF token validation failed');
+        }
+        
+        if (!isset($_SESSION['user_id'])) {
+            throw new Exception('User authentication required');
+        }
+        
+        // Validate savings and fee amounts
+        $savingsAmount = isset($_POST['savings_amount']) ? floatval($_POST['savings_amount']) : 0;
+        $feeAmount = isset($_POST['fee_amount']) ? floatval($_POST['fee_amount']) : 0;
+        
+        if ($savingsAmount <= 0) {
+            throw new Exception('Invalid savings amount');
+        }
+        
+        if ($feeAmount <= 0) {
+            throw new Exception('Invalid fee amount');
+        }
+        
+        $stripeKey = $_ENV['STRIPE_SECRET_KEY'] ?? '';
+        
+        if (empty($stripeKey)) {
+            throw new Exception('Stripe configuration missing');
+        }
+        
+        \Stripe\Stripe::setApiKey($stripeKey);
+        
+        // Create a product for the one-time payment
+        $product = \Stripe\Product::create([
+            'name' => 'Copilot License Savings',
+            'description' => 'One-time payment for Copilot license savings of $' . number_format($savingsAmount, 2),
+        ]);
+        
+        // Create a price with the calculated fee amount
+        $price = \Stripe\Price::create([
+            'product' => $product->id,
+            'unit_amount' => round($feeAmount * 100), // Convert to cents
+            'currency' => 'usd',
+        ]);
+        
+        // Create a checkout session with the inline price
+        $checkout_session = \Stripe\Checkout\Session::create([
+            'payment_method_types' => ['card'],
+            'line_items' => [[
+                'price' => $price->id,
+                'quantity' => 1,
+            ]],
+            'mode' => 'payment',
+            'success_url' => $redirectUri . '?save_success=1',
+            'cancel_url' => $redirectUri . '?save_canceled=1',
+            'metadata' => [
+                'github_org' => $org,
+                'savings_amount' => $savingsAmount,
+                'fee_amount' => $feeAmount,
+            ],
+        ]);
+
+        header("Location: " . $checkout_session->url);
+        exit();
+    } catch (Exception $e) {
+        error_log('Save Now payment error: ' . $e->getMessage());
+        http_response_code(400);
+        exit('Payment creation failed: ' . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8'));
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -727,6 +798,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['subscribe'])) {
                 </div>
                 <span class="subscription-badge inactive">Inactive</span>
             </div>
+        <?php elseif (isset($_GET['save_success'])): ?>
+            <div class="subscription-status active">
+                <div>
+                    <strong>Payment Successful!</strong>
+                    <p>Thank you for your payment. Your savings report has been generated.</p>
+                </div>
+                <span class="subscription-badge active">Paid</span>
+            </div>
+        <?php elseif (isset($_GET['save_canceled'])): ?>
+            <div class="subscription-status inactive">
+                <div>
+                    <strong>Payment Canceled</strong>
+                    <p>You can try the payment again when you're ready.</p>
+                </div>
+                <span class="subscription-badge inactive">Canceled</span>
+            </div>
         <?php else: ?>
             <div class="subscription-status <?= isset($isSubscribed) && $isSubscribed ? 'active' : 'inactive' ?>">
                 <div>
@@ -759,7 +846,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['subscribe'])) {
                             Auto-save feature is active
                         </div>
                     <?php else: ?>
-                        <a href="#" class="btn btn-primary" onclick="alert('Save functionality coming soon!')">
+                        <a href="#" class="btn btn-primary" onclick="createSaveNowCheckout(<?= $totalPotentialSavings ?>)">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                                 <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/>
                             </svg>
@@ -836,5 +923,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['subscribe'])) {
         <a href="privacy.php">Privacy Policy</a>
     </div>
 
+    <script>
+    function createSaveNowCheckout(savingsAmount) {
+        // Calculate the fee based on savings amount
+        let feeAmount;
+        if (savingsAmount > 500) {
+            feeAmount = 100; // Flat $100 for savings > $500
+        } else if (savingsAmount >= 100) {
+            feeAmount = savingsAmount * 0.2; // 20% for savings between $100 and $500
+        } else {
+            feeAmount = savingsAmount * 0.4; // 40% for savings < $100
+        }
+        
+        // Round to 2 decimal places
+        feeAmount = Math.round(feeAmount * 100) / 100;
+        
+        // Create a form to submit the request
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '<?= htmlspecialchars($redirectUri) ?>';
+        
+        // Add CSRF token
+        const csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrf_token';
+        csrfInput.value = '<?= htmlspecialchars($_SESSION['csrf_token']) ?>';
+        form.appendChild(csrfInput);
+        
+        // Add save_now parameter
+        const saveNowInput = document.createElement('input');
+        saveNowInput.type = 'hidden';
+        saveNowInput.name = 'save_now';
+        saveNowInput.value = '1';
+        form.appendChild(saveNowInput);
+        
+        // Add savings amount
+        const savingsInput = document.createElement('input');
+        savingsInput.type = 'hidden';
+        savingsInput.name = 'savings_amount';
+        savingsInput.value = savingsAmount;
+        form.appendChild(savingsInput);
+        
+        // Add fee amount
+        const feeInput = document.createElement('input');
+        feeInput.type = 'hidden';
+        feeInput.name = 'fee_amount';
+        feeInput.value = feeAmount;
+        form.appendChild(feeInput);
+        
+        // Submit the form
+        document.body.appendChild(form);
+        form.submit();
+    }
+    </script>
 </body>
 </html>
