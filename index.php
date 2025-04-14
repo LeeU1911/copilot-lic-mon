@@ -38,7 +38,7 @@ header("X-Frame-Options: DENY");
 header("X-XSS-Protection: 1; mode=block");
 header("X-Content-Type-Options: nosniff");
 header("Referrer-Policy: strict-origin-when-cross-origin");
-header("Content-Security-Policy: default-src 'self' https://github.com https://api.github.com https://js.stripe.com; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;");
+header("Content-Security-Policy: default-src 'self' https://github.com https://api.github.com https://js.stripe.com; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.stripe.com;");
 
 // Generate CSRF token if not exists
 if (empty($_SESSION['csrf_token'])) {
@@ -80,10 +80,22 @@ try {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (github_org) REFERENCES github_auth(github_org) ON DELETE CASCADE
     )");
+    
+    $db->exec("CREATE TABLE IF NOT EXISTS seat_disabling_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        github_org TEXT NOT NULL,
+        payment_id TEXT NOT NULL,
+        savings_amount REAL NOT NULL,
+        seats_disabled INTEGER NOT NULL,
+        total_inactive_seats INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (github_org) REFERENCES github_auth(github_org) ON DELETE CASCADE
+    )");
 
     // Add indexes for performance
     $db->exec("CREATE INDEX IF NOT EXISTS idx_github_auth_org ON github_auth(github_org)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_subscriptions_org ON subscriptions(github_org)");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_seat_disabling_logs_org ON seat_disabling_logs(github_org)");
 } catch (Exception $e) {
     error_log('Database schema error: ' . $e->getMessage());
     http_response_code(500);
@@ -431,6 +443,141 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_STRIPE_SIGNATU
             $stmt->bindValue(':subscription_id', $subscriptionId, SQLITE3_TEXT);
             $stmt->execute();
         }
+        
+        // Handle checkout.session.completed for "Save Now" payments
+        if ($event->type === 'checkout.session.completed') {
+            $paymentIntent = $event->data->object;
+            
+            // Get the checkout session that created this payment intent
+            $checkoutSessionId = $paymentIntent->id ?? null;
+            if (!$checkoutSessionId) {
+                throw new Exception('Missing checkout_session_id in payment intent metadata');
+            }
+            
+            $checkoutSession = \Stripe\Checkout\Session::retrieve($checkoutSessionId);
+            
+            // Check if this is a "Save Now" payment
+            if (isset($checkoutSession->metadata->savings_amount) && isset($checkoutSession->metadata->github_org)) {
+                $githubOrg = $checkoutSession->metadata->github_org;
+                $savingsAmount = $checkoutSession->metadata->savings_amount;
+                
+                error_log("Processing 'Save Now' payment for organization: $githubOrg with savings: $savingsAmount");
+                
+                // Get GitHub token for the organization
+                $stmt = $db->prepare("SELECT github_token FROM github_auth WHERE github_org = :org");
+                $stmt->bindValue(':org', $githubOrg, SQLITE3_TEXT);
+                $result = $stmt->execute();
+                $auth = $result->fetchArray(SQLITE3_ASSOC);
+                
+                if (!$auth || empty($auth['github_token'])) {
+                    throw new Exception("GitHub token not found for organization: $githubOrg");
+                }
+                
+                $githubToken = $auth['github_token'];
+                
+                // Get inactive seats for the organization
+                $inactiveSeats = [];
+                $ch = curl_init("https://api.github.com/orgs/$githubOrg/copilot/billing/seats");
+                curl_setopt_array($ch, [
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_HTTPHEADER => [
+                        "Authorization: Bearer $githubToken",
+                        "User-Agent: CopilotAuditApp",
+                        "Accept: application/vnd.github+json"
+                    ],
+                    CURLOPT_SSL_VERIFYPEER => true,
+                    CURLOPT_SSL_VERIFYHOST => 2
+                ]);
+                
+                $response = curl_exec($ch);
+                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                
+                if ($response === false) {
+                    throw new Exception('GitHub API request failed: ' . curl_error($ch));
+                }
+                
+                if ($httpCode !== 200) {
+                    throw new Exception('GitHub API error: HTTP code ' . $httpCode);
+                }
+                
+                $seats = json_decode($response, true);
+                curl_close($ch);
+                
+                // Find inactive seats
+                if (isset($seats['seats']) && is_array($seats['seats'])) {
+                    foreach ($seats['seats'] as $seat) {
+                        $isInactive = false;
+                        
+                        if (empty($seat['last_activity_at'])) {
+                            $isInactive = true;
+                        } else {
+                            $lastActive = new DateTime($seat['last_activity_at']);
+                            $now = new DateTime();
+                            $daysInactive = $now->diff($lastActive)->days;
+                            
+                            if ($daysInactive > 90) {
+                                $isInactive = true;
+                            }
+                        }
+                        
+                        if ($isInactive) {
+                            $inactiveSeats[] = [
+                                'login' => $seat['assignee']['login'],
+                                'last_active' => $seat['last_activity_at'] ?? 'Never'
+                            ];
+                        }
+                    }
+                }
+                
+                // Disable inactive seats
+                $disabledSeats = 0;
+                foreach ($inactiveSeats as $seat) {
+                    $username = $seat['login'];
+                    
+                    // Call GitHub API to disable the seat
+                    $ch = curl_init("https://api.github.com/orgs/$githubOrg/copilot/billing/selected_users");
+                    curl_setopt_array($ch, [
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_CUSTOMREQUEST => "DELETE",
+                        CURLOPT_HTTPHEADER => [
+                            "Authorization: Bearer $githubToken",
+                            "User-Agent: CopilotAuditApp",
+                            "Accept: application/vnd.github+json"
+                        ],
+                        CURLOPT_POSTFIELDS => json_encode([
+                            'selected_usernames' => [$username]
+                        ]),
+                        CURLOPT_SSL_VERIFYPEER => true,
+                        CURLOPT_SSL_VERIFYHOST => 2
+                    ]);
+                    $response = curl_exec($ch);
+                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    curl_close($ch);
+                    
+                    if ($httpCode === 200) {
+                        $disabledSeats++;
+                        error_log("Successfully disabled Copilot seat for user: $username in organization: $githubOrg");
+                    } else {
+                        error_log("Failed to disable Copilot seat for user: $username in organization: $githubOrg. HTTP code: $httpCode");
+                    }
+                }
+                
+                // Log the results
+                error_log("Disabled $disabledSeats out of " . count($inactiveSeats) . " inactive seats for organization: $githubOrg");
+                
+                // Store the results in the database
+                $stmt = $db->prepare("INSERT INTO seat_disabling_logs 
+                    (github_org, payment_id, savings_amount, seats_disabled, total_inactive_seats, created_at) 
+                    VALUES (:org, :payment_id, :savings_amount, :seats_disabled, :total_inactive_seats, CURRENT_TIMESTAMP)");
+                
+                $stmt->bindValue(':org', $githubOrg, SQLITE3_TEXT);
+                $stmt->bindValue(':payment_id', $paymentIntent->id, SQLITE3_TEXT);
+                $stmt->bindValue(':savings_amount', $savingsAmount, SQLITE3_FLOAT);
+                $stmt->bindValue(':seats_disabled', $disabledSeats, SQLITE3_INTEGER);
+                $stmt->bindValue(':total_inactive_seats', count($inactiveSeats), SQLITE3_INTEGER);
+                $stmt->execute();
+            }
+        }
 
         http_response_code(200);
         exit('Webhook processed successfully');
@@ -440,6 +587,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_STRIPE_SIGNATU
         exit('Invalid signature');
     } catch (Exception $e) {
         error_log('Stripe webhook error: ' . $e->getMessage());
+        error_log('Stack trace: ' . $e->getTraceAsString());
         http_response_code(400);
         exit('Webhook error');
     }
@@ -492,12 +640,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['subscribe'])) {
 // Handle "Save Now" with inline pricing
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_now'])) {
     try {
+        // Debug information
+        error_log('Save Now request received: ' . print_r($_POST, true));
+        
         // Verify CSRF token
         if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+            error_log('CSRF token validation failed. Expected: ' . $_SESSION['csrf_token'] . ', Received: ' . ($_POST['csrf_token'] ?? 'not set'));
             throw new Exception('CSRF token validation failed');
         }
         
         if (!isset($_SESSION['user_id'])) {
+            error_log('User authentication required but not set');
             throw new Exception('User authentication required');
         }
         
@@ -505,17 +658,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_now'])) {
         $savingsAmount = isset($_POST['savings_amount']) ? floatval($_POST['savings_amount']) : 0;
         $feeAmount = isset($_POST['fee_amount']) ? floatval($_POST['fee_amount']) : 0;
         
+        error_log('Savings amount: ' . $savingsAmount . ', Fee amount: ' . $feeAmount);
+        
         if ($savingsAmount <= 0) {
+            error_log('Invalid savings amount: ' . $savingsAmount);
             throw new Exception('Invalid savings amount');
         }
         
         if ($feeAmount <= 0) {
+            error_log('Invalid fee amount: ' . $feeAmount);
             throw new Exception('Invalid fee amount');
         }
         
         $stripeKey = $_ENV['STRIPE_SECRET_KEY'] ?? '';
         
         if (empty($stripeKey)) {
+            error_log('Stripe configuration missing');
             throw new Exception('Stripe configuration missing');
         }
         
@@ -527,12 +685,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_now'])) {
             'description' => 'One-time payment for Copilot license savings of $' . number_format($savingsAmount, 2),
         ]);
         
+        error_log('Created Stripe product: ' . $product->id);
+        
         // Create a price with the calculated fee amount
         $price = \Stripe\Price::create([
             'product' => $product->id,
             'unit_amount' => round($feeAmount * 100), // Convert to cents
             'currency' => 'usd',
         ]);
+        
+        error_log('Created Stripe price: ' . $price->id);
         
         // Create a checkout session with the inline price
         $checkout_session = \Stripe\Checkout\Session::create([
@@ -551,10 +713,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_now'])) {
             ],
         ]);
 
+        error_log('Created Stripe checkout session: ' . $checkout_session->id);
+        error_log('Redirecting to: ' . $checkout_session->url);
+
         header("Location: " . $checkout_session->url);
         exit();
     } catch (Exception $e) {
         error_log('Save Now payment error: ' . $e->getMessage());
+        error_log('Stack trace: ' . $e->getTraceAsString());
         http_response_code(400);
         exit('Payment creation failed: ' . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8'));
     }
@@ -568,6 +734,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_now'])) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <script src="https://js.stripe.com/v3/"></script>
+    <script src="js/save-now.js"></script>
     <style>
         /* CSS remains the same */
         body {
@@ -846,12 +1013,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_now'])) {
                             Auto-save feature is active
                         </div>
                     <?php else: ?>
-                        <a href="#" class="btn btn-primary" onclick="createSaveNowCheckout(<?= $totalPotentialSavings ?>)">
+                        <!-- JavaScript approach -->
+                        <a href="#" class="btn btn-primary" id="save-now-button" 
+                           data-savings-amount="<?= $totalPotentialSavings ?>"
+                           data-csrf-token="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                                 <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/>
                             </svg>
                             Save Now
                         </a>
+                        
+                        <!-- Direct form submission approach -->
+                        <form method="POST" style="display: inline;">
+                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+                            <input type="hidden" name="save_now" value="1">
+                            <input type="hidden" name="savings_amount" value="<?= $totalPotentialSavings ?>">
+                            <input type="hidden" name="fee_amount" value="<?= 
+                                $totalPotentialSavings > 500 ? 100 : 
+                                ($totalPotentialSavings >= 100 ? $totalPotentialSavings * 0.2 : $totalPotentialSavings * 0.4) 
+                            ?>">
+                            <button type="submit" class="btn btn-primary" style="display: none;">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/>
+                                </svg>
+                                Save Now (Direct)
+                            </button>
+                        </form>
+                        
+                        <!-- Not launching yet 
                         <form method="POST" style="display: inline;">
                             <input type="hidden" name="subscribe" value="1">
                             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
@@ -862,7 +1051,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_now'])) {
                                 </svg>
                                 Subscribe for Auto-Save
                             </button>
-                        </form>
+                        </form> -->
                     <?php endif; ?>
                 </div>
             </div>
@@ -922,59 +1111,5 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_now'])) {
     <div class="footer">
         <a href="privacy.php">Privacy Policy</a>
     </div>
-
-    <script>
-    function createSaveNowCheckout(savingsAmount) {
-        // Calculate the fee based on savings amount
-        let feeAmount;
-        if (savingsAmount > 500) {
-            feeAmount = 100; // Flat $100 for savings > $500
-        } else if (savingsAmount >= 100) {
-            feeAmount = savingsAmount * 0.2; // 20% for savings between $100 and $500
-        } else {
-            feeAmount = savingsAmount * 0.4; // 40% for savings < $100
-        }
-        
-        // Round to 2 decimal places
-        feeAmount = Math.round(feeAmount * 100) / 100;
-        
-        // Create a form to submit the request
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = '<?= htmlspecialchars($redirectUri) ?>';
-        
-        // Add CSRF token
-        const csrfInput = document.createElement('input');
-        csrfInput.type = 'hidden';
-        csrfInput.name = 'csrf_token';
-        csrfInput.value = '<?= htmlspecialchars($_SESSION['csrf_token']) ?>';
-        form.appendChild(csrfInput);
-        
-        // Add save_now parameter
-        const saveNowInput = document.createElement('input');
-        saveNowInput.type = 'hidden';
-        saveNowInput.name = 'save_now';
-        saveNowInput.value = '1';
-        form.appendChild(saveNowInput);
-        
-        // Add savings amount
-        const savingsInput = document.createElement('input');
-        savingsInput.type = 'hidden';
-        savingsInput.name = 'savings_amount';
-        savingsInput.value = savingsAmount;
-        form.appendChild(savingsInput);
-        
-        // Add fee amount
-        const feeInput = document.createElement('input');
-        feeInput.type = 'hidden';
-        feeInput.name = 'fee_amount';
-        feeInput.value = feeAmount;
-        form.appendChild(feeInput);
-        
-        // Submit the form
-        document.body.appendChild(form);
-        form.submit();
-    }
-    </script>
 </body>
 </html>
