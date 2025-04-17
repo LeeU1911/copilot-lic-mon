@@ -1495,6 +1495,7 @@ foreach ($logs as $log) {
 
     <div class="footer">
         <a href="privacy.php">Privacy Policy</a>
+        <a href="https://github.com/LeeU1911/Copilot-Lic-Mon" target="_blank">GitHub</a>
     </div>
 
     <!-- payment Modal -->
