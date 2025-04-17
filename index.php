@@ -1283,6 +1283,15 @@ foreach ($logs as $log) {
     <?php endif; ?>
 
     <?php if (!isset($_SESSION['user_id'])): ?>
+        <div style="max-width: 600px; margin: 40px auto; padding: 30px; background: #f9f9f9; border-radius: 12px; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1); font-family: sans-serif;">
+            <h2 style="margin-bottom: 16px; color: #333;">Cut GitHub Copilot Costs with Confidence</h2>
+            <p style="font-size: 16px; color: #555; margin-bottom: 24px;">
+                See exactly who's using their Copilot seat and where you're overspending. Gain instant visibility into your team's activity and free up unused licenses in seconds.
+            </p>
+<p style="font-size: 14px; color: #d9534f; font-weight: bold; margin-bottom: 24px;">
+    🔐 You must be an organization owner and authorize with <code>manage_billing:copilot</code> and <code>read:org</code> scopes to use this tool.
+  </p>
+        </div>
         <a href="https://github.com/login/oauth/authorize?client_id=<?= htmlspecialchars($clientId) ?>&redirect_uri=<?= urlencode($redirectUri) ?>&scope=read:org,manage_billing:copilot&state=<?= htmlspecialchars($_SESSION['oauth_state']) ?>">
             Login with GitHub
         </a>
