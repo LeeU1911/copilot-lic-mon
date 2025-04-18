@@ -1,6 +1,10 @@
 # copilot-lic-mon
 GitHub Copilot License Monitoring
 
+Link: [jadedoan.art](http://jadedoan.art) 
+
+_I simply made use one of my domains_
+
 ## Cut GitHub Copilot Costs with Confidence
 
 See exactly who's using their Copilot seat and where you're overspending. Gain instant visibility into your team's activity and free up unused licenses in seconds.
