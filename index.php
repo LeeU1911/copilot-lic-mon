@@ -39,7 +39,7 @@ header("X-Frame-Options: DENY");
 header("X-XSS-Protection: 1; mode=block");
 header("X-Content-Type-Options: nosniff");
 header("Referrer-Policy: strict-origin-when-cross-origin");
-header("Content-Security-Policy: default-src 'self' https://github.com https://api.github.com https://js.stripe.com; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.stripe.com;");
+header("Content-Security-Policy: default-src 'self' https://github.com https://api.github.com https://js.stripe.com; script-src 'self' https://js.stripe.com https://cloud.umami.is; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.stripe.com;");
 
 // Generate CSRF token if not exists
 if (empty($_SESSION['csrf_token'])) {
@@ -807,6 +807,7 @@ foreach ($logs as $log) {
     <script src="https://js.stripe.com/v3/"></script>
     <script src="js/save-now.js"></script>
     <script src="js/script.js"></script>
+    <script defer src="https://cloud.umami.is/script.js" data-website-id="fbf39905-9461-4054-b1d2-ed35013c8dce"></script>
     <style>
         /* CSS remains the same */
         body {
