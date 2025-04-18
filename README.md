@@ -1,6 +1,13 @@
 # copilot-lic-mon
 GitHub Copilot License Monitoring
 
+## Cut GitHub Copilot Costs with Confidence
+
+See exactly who's using their Copilot seat and where you're overspending. Gain instant visibility into your team's activity and free up unused licenses in seconds.
+
+> [!CAUTION]
+> 🔐 You must be an organization owner and authorize with manage_billing:copilot and read:org scopes to use this tool.
+
 ## MIT License
 
 Copyright (c) 2025 LeeU1911
