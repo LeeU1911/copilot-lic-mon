@@ -39,7 +39,7 @@ header("X-Frame-Options: DENY");
 header("X-XSS-Protection: 1; mode=block");
 header("X-Content-Type-Options: nosniff");
 header("Referrer-Policy: strict-origin-when-cross-origin");
-header("Content-Security-Policy: default-src 'self' https://github.com https://api.github.com https://js.stripe.com; script-src 'self' https://js.stripe.com https://cloud.umami.is; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.stripe.com;");
+header("Content-Security-Policy: default-src 'self' https://github.com https://api.github.com https://js.stripe.com; script-src 'self' https://js.stripe.com https://cloud.umami.is; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.stripe.com https://api-gateway.umami.dev https://q.stripe.com;");
 
 // Generate CSRF token if not exists
 if (empty($_SESSION['csrf_token'])) {
