@@ -1272,6 +1272,69 @@ foreach ($logs as $log) {
         .audit-logs .log-details .text-danger {
             color: #dc3545;
         }
+        .container {
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: white;
+      border: 1px solid #e1e4e8;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(27,31,35,0.15);
+    }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 0.5em;
+    }
+    p.lead {
+      font-size: 1.125rem;
+      margin-bottom: 1.5em;
+      line-height: 1.6;
+    }
+    .notice {
+      background: #ffeef0;
+      color: #86181d;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 1.5em;
+      font-size: 0.95rem;
+    }
+    .btn {
+      display: inline-block;
+      background: #2ea44f;
+      color: white;
+      text-decoration: none;
+      font-weight: 600;
+      padding: 12px 24px;
+      border-radius: 6px;
+      transition: background 0.2s ease;
+    }
+    .btn:hover {
+      background: #2c974b;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1.5em;
+    }
+    th, td {
+      padding: 12px 8px;
+      border: 1px solid #d1d5da;
+      text-align: left;
+    }
+    th {
+      background: #f6f8fa;
+      font-weight: 600;
+    }
+    tr.cancelled {
+      background: #ffeef0;
+    }
+    a.username {
+      color: #0969da;
+      text-decoration: none;
+    }
+    a.username:hover {
+      text-decoration: underline;
+    }
     </style>
 </head>
 <body>
@@ -1284,18 +1347,47 @@ foreach ($logs as $log) {
     <?php endif; ?>
 
     <?php if (!isset($_SESSION['user_id'])): ?>
-        <div style="max-width: 600px; margin: 40px auto; padding: 30px; background: #f9f9f9; border-radius: 12px; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1); font-family: sans-serif;">
-            <h2 style="margin-bottom: 16px; color: #333;">Cut GitHub Copilot Costs with Confidence</h2>
-            <p style="font-size: 16px; color: #555; margin-bottom: 24px;">
-                See exactly who's using their Copilot seat and where you're overspending. Gain instant visibility into your team's activity and free up unused licenses in seconds.
+        <div class="container">
+            <h1>👥 Cut GitHub Copilot Costs with Confidence</h1>
+            <p class="lead">
+            See exactly who’s using their Copilot seat and where you’re overspending. Instant visibility into your team’s activity and free up unused licenses in seconds.
             </p>
-<p style="font-size: 14px; color: #d9534f; font-weight: bold; margin-bottom: 24px;">
-    🔐 You must be an organization owner and authorize with <code>manage_billing:copilot</code> and <code>read:org</code> scopes to use this tool.
-  </p>
+
+            <div class="notice">
+            🔐 You must be an organization owner and authorize with <code>read:org</code> &amp; <code>manage_billing:copilot</code> scopes to use this tool.
+            </div>
+
+            <a class="btn" href="https://github.com/login/oauth/authorize?client_id=<?= htmlspecialchars($clientId) ?>&redirect_uri=<?= urlencode($redirectUri) ?>&scope=read:org,manage_billing:copilot&state=<?= htmlspecialchars($_SESSION['oauth_state']) ?>">
+                🚀 Log in with GitHub to Get Started
+            </a>
+            <table>
+            <thead>
+                <tr>
+                <th>User</th>
+                <th>Last Activity</th>
+                <th>Plan Type</th>
+                <th>Status</th>
+                <th>Potential Savings</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                <td><a class="username" href="https://github.com/octocat" target="_blank">octocat</a></td>
+                <td>2021-10-14</td>
+                <td>Business</td>
+                <td>Active</td>
+                <td>—</td>
+                </tr>
+                <tr class="cancelled">
+                <td><a class="username" href="https://github.com/octokitten" target="_blank">octokitten</a></td>
+                <td>Inactive for 100 days</td>
+                <td>Business</td>
+                <td>Inactive</td>
+                <td>€19.00/mo</td>
+                </tr>
+            </tbody>
+            </table>
         </div>
-        <a href="https://github.com/login/oauth/authorize?client_id=<?= htmlspecialchars($clientId) ?>&redirect_uri=<?= urlencode($redirectUri) ?>&scope=read:org,manage_billing:copilot&state=<?= htmlspecialchars($_SESSION['oauth_state']) ?>">
-            Login with GitHub
-        </a>
     <?php else: ?>
         <h3>Organization: <?= htmlspecialchars($org) ?></h3>
 
