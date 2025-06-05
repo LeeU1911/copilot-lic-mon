@@ -7,11 +7,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const formSuccess = document.getElementById('form-success');
     
     document.querySelectorAll(".btn-view").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          const logId = btn.getAttribute("data-log-id");
-          toggleLogDetails(parseInt(logId));
+        btn.addEventListener("click", function (event) {
+            const logId = event.currentTarget.getAttribute("data-log-id");
+            toggleLogDetails(parseInt(logId), event.currentTarget);
         });
-      });
+    });
       
 
     if (btn) {
@@ -176,10 +176,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // Toggle log details
-    function toggleLogDetails(logId) {
+    function toggleLogDetails(logId, button) {
         const detailsRow = document.getElementById(`log-details-${logId}`);
-        const button = event.currentTarget;
-        
+
+        if (!detailsRow) {
+            return;
+        }
+
         if (detailsRow.style.display === 'none') {
             detailsRow.style.display = 'table-row';
             button.innerHTML = '<i class="bi bi-eye-slash"></i> Hide';
